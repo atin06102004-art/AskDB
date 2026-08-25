@@ -1,3 +1,10 @@
+import sys
+import os
+
+# Add the repo root (parent of this file's folder) to the path so
+# "agent" is importable when Streamlit runs frontend/app.py directly.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import streamlit as st
 from agent.sql_agent import ask
 
