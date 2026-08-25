@@ -1,45 +1,54 @@
-import streamlit as st
-from agent.sql_agent import ask
+from langchain_community.utilities import SQLDatabase
+from langchain_groq import ChatGroq
+from langchain_community.agent_toolkits import create_sql_agent
+from dotenv import load_dotenv
+import os
 
-st.set_page_config(page_title="Text-to-SQL Agent", page_icon="🤖")
+load_dotenv()
 
-st.title("🤖 Text-to-SQL Agent")
-st.markdown("Ask any question about the Northwind database in plain English!")
+try:
+    import streamlit as st
+    _secrets = st.secrets
+except Exception:
+    _secrets = {}
 
-st.sidebar.header("💡 Example Questions")
-examples = [
-    "How many customers are there?",
-    "Which country has the most customers?",
-    "Who are the top 5 customers by number of orders?",
-    "What are the top 3 selling products?",
-    "Which employee has handled the most orders?",
-    "What is the total revenue per country?"
-]
 
-for example in examples:
-    if st.sidebar.button(example):
-        st.session_state.question = example
+def get_env(key: str) -> str:
+    return os.getenv(key) or _secrets.get(key, "")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+def get_db():
+    db_uri = (
+        f"postgresql+psycopg2://{get_env('DB_USER')}:"
+        f"{get_env('DB_PASSWORD')}@{get_env('DB_HOST')}:"
+        f"{get_env('DB_PORT')}/{get_env('DB_NAME')}"
+    )
+    return SQLDatabase.from_uri(db_uri)
 
-question = st.chat_input("Ask a question about the database...")
 
-if "question" in st.session_state and st.session_state.question:
-    question = st.session_state.question
-    st.session_state.question = None
+def get_agent():
+    db = get_db()
 
-if question:
-    st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        temperature=0,
+        groq_api_key=get_env("GROQ_API_KEY")
+    )
 
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            answer = ask(question)
-            st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+    agent = create_sql_agent(
+        llm=llm,
+        db=db,
+        agent_type="tool-calling",
+        verbose=True
+    )
+
+    return agent
+
+
+def ask(question: str) -> str:
+    try:
+        agent = get_agent()
+        result = agent.invoke({"input": question})
+        return result.get("output") or result.get("answer") or str(result)
+    except Exception as e:
+        return f"Error: {str(e)}"
