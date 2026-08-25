@@ -1,43 +1,45 @@
-from langchain_community.utilities import SQLDatabase
-from langchain_groq import ChatGroq
-from langchain_community.agent_toolkits import create_sql_agent
-from dotenv import load_dotenv
-import os
+import streamlit as st
+from agent.sql_agent import ask
 
-load_dotenv()
+st.set_page_config(page_title="Text-to-SQL Agent", page_icon="🤖")
 
-def get_db():
-    db_uri = (
-        f"postgresql+psycopg2://{os.getenv('DB_USER')}:"
-        f"{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:"
-        f"{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
-    )
-    return SQLDatabase.from_uri(db_uri)
+st.title("🤖 Text-to-SQL Agent")
+st.markdown("Ask any question about the Northwind database in plain English!")
 
+st.sidebar.header("💡 Example Questions")
+examples = [
+    "How many customers are there?",
+    "Which country has the most customers?",
+    "Who are the top 5 customers by number of orders?",
+    "What are the top 3 selling products?",
+    "Which employee has handled the most orders?",
+    "What is the total revenue per country?"
+]
 
-def get_agent():
-    db = get_db()
+for example in examples:
+    if st.sidebar.button(example):
+        st.session_state.question = example
 
-    llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
-        temperature=0,
-        groq_api_key=os.getenv("GROQ_API_KEY")
-    )
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    agent = create_sql_agent(
-        llm=llm,
-        db=db,
-        agent_type="openai-tools",
-        verbose=True
-    )
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-    return agent
+question = st.chat_input("Ask a question about the database...")
 
+if "question" in st.session_state and st.session_state.question:
+    question = st.session_state.question
+    st.session_state.question = None
 
-def ask(question: str) -> str:
-    try:
-        agent = get_agent()
-        result = agent.invoke({"input": question})
-        return result["output"]
-    except Exception as e:
-        return f"Error: {str(e)}"
+if question:
+    st.session_state.messages.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            answer = ask(question)
+            st.markdown(answer)
+            st.session_state.messages.append({"role": "assistant", "content": answer})
