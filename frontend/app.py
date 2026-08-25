@@ -1,5 +1,8 @@
 import streamlit as st
 import requests
+import os
+
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="Text-to-SQL Agent", page_icon="🤖")
 
@@ -47,7 +50,7 @@ if question:
         with st.spinner("Thinking..."):
             try:
                 response = requests.post(
-                    "http://127.0.0.1:8000/query",
+                    f"{API_URL}/query",
                     json={"question": question}
                 )
                 answer = response.json()["answer"]
