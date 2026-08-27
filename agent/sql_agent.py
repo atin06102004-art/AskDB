@@ -30,7 +30,7 @@ def get_agent():
     db = get_db()
 
     llm = ChatGroq(
-    model="llama-3.1-8b-instant",
+    model="openai/gpt-oss-120b",
     temperature=0,
     groq_api_key=get_env("GROQ_API_KEY")
     )
