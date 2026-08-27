@@ -1,132 +1,88 @@
-from langchain_community.utilities import SQLDatabase
-from langchain_groq import ChatGroq
-from langchain_community.agent_toolkits import create_sql_agent
-from dotenv import load_dotenv
-import os
-import tempfile
-import re
-import sqlite3
-import pandas as pd
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-load_dotenv()
+import streamlit as st
 
+st.set_page_config(page_title="Text-to-SQL Agent", page_icon="🤖")
+st.write("✅ Streamlit is rendering.")
+
+st.write("⏳ Importing agent module...")
 try:
-    import streamlit as st
-    _secrets = st.secrets
-except Exception:
-    _secrets = {}
-
-
-def get_env(key: str) -> str:
-    return os.getenv(key) or _secrets.get(key, "")
-
-
-def get_db():
-    db_uri = (
-        f"postgresql+psycopg2://{get_env('DB_USER')}:"
-        f"{get_env('DB_PASSWORD')}@{get_env('DB_HOST')}:"
-        f"{get_env('DB_PORT')}/{get_env('DB_NAME')}"
+    from agent.sql_agent import (
+        ask, build_sqlite_from_uploads, get_db_from_sqlite,
+        get_agent_for_db, ask_with_agent
     )
-    return SQLDatabase.from_uri(db_uri)
+    st.write("✅ Agent module imported successfully.")
+except Exception as e:
+    st.error(f"❌ Failed to import agent module: {e}")
+    st.stop()
 
+st.title("🤖 Text-to-SQL Agent")
 
-def get_agent():
-    db = get_db()
+mode = st.radio("Data source", ["Northwind demo database", "Upload your own data"])
 
-    llm = ChatGroq(
-        model="openai/gpt-oss-120b",
-        temperature=0,
-        groq_api_key=get_env("GROQ_API_KEY")
+uploaded_agent = None
+
+if mode == "Upload your own data":
+    files = st.file_uploader(
+        "Upload one or more CSV or Excel files",
+        type=["csv", "xlsx", "xls"],
+        accept_multiple_files=True
     )
+    if files:
+        file_signature = tuple(f.name + str(f.size) for f in files)
+        if st.session_state.get("upload_signature") != file_signature:
+            with st.spinner("Loading your files..."):
+                db_path = build_sqlite_from_uploads(files)
+                db = get_db_from_sqlite(db_path)
+                st.session_state.uploaded_agent = get_agent_for_db(db)
+                st.session_state.upload_signature = file_signature
+                st.session_state.messages = []
+            st.success(f"Loaded {len(files)} file(s). Ask away!")
+        uploaded_agent = st.session_state.get("uploaded_agent")
+    else:
+        st.info("Upload at least one file to start asking questions.")
+else:
+    st.markdown("Ask any question about the Northwind database in plain English!")
+    st.sidebar.header("💡 Example Questions")
+    examples = [
+        "How many customers are there?",
+        "Which country has the most customers?",
+        "Who are the top 5 customers by number of orders?",
+        "What are the top 3 selling products?",
+        "Which employee has handled the most orders?",
+        "What is the total revenue per country?"
+    ]
+    for example in examples:
+        if st.sidebar.button(example):
+            st.session_state.question = example
 
-    agent = create_sql_agent(
-        llm=llm,
-        db=db,
-        agent_type="tool-calling",
-        verbose=True
-    )
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    return agent
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
+question = st.chat_input("Ask a question about the data...")
 
-def ask(question: str) -> str:
-    try:
-        agent = get_agent()
-        result = agent.invoke({"input": question})
-        return result.get("output") or result.get("answer") or str(result)
-    except Exception as e:
-        return f"Error: {str(e)}"
+if "question" in st.session_state and st.session_state.question:
+    question = st.session_state.question
+    st.session_state.question = None
 
+if question:
+    st.session_state.messages.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.markdown(question)
 
-def sanitize_table_name(name: str) -> str:
-    name = re.sub(r'\W+', '_', name).strip('_').lower()
-    if not name or name[0].isdigit():
-        name = f"t_{name}"
-    return name
-
-
-def build_sqlite_from_uploads(uploaded_files) -> str:
-    """
-    uploaded_files: list of Streamlit UploadedFile objects (.csv, .xlsx, .xls)
-    Each CSV becomes one table. Each sheet in an Excel file becomes its own table.
-    Returns the path to a temp SQLite database file containing all of them.
-    """
-    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
-    db_path = tmp_file.name
-    tmp_file.close()
-
-    conn = sqlite3.connect(db_path)
-    used_names = set()
-
-    def unique_name(base):
-        name = base
-        i = 1
-        while name in used_names:
-            name = f"{base}_{i}"
-            i += 1
-        used_names.add(name)
-        return name
-
-    for f in uploaded_files:
-        base_name = sanitize_table_name(f.name.rsplit(".", 1)[0])
-        ext = f.name.rsplit(".", 1)[-1].lower()
-
-        if ext == "csv":
-            df = pd.read_csv(f)
-            table_name = unique_name(base_name)
-            df.to_sql(table_name, conn, if_exists="replace", index=False)
-
-        elif ext in ("xlsx", "xls"):
-            sheets = pd.read_excel(f, sheet_name=None)
-            for sheet_name, df in sheets.items():
-                table_name = unique_name(sanitize_table_name(f"{base_name}_{sheet_name}"))
-                df.to_sql(table_name, conn, if_exists="replace", index=False)
-
-    conn.close()
-    return db_path
-
-
-def get_db_from_sqlite(db_path: str):
-    return SQLDatabase.from_uri(f"sqlite:///{db_path}")
-
-
-def get_agent_for_db(db):
-    llm = ChatGroq(
-        model="openai/gpt-oss-120b",
-        temperature=0,
-        groq_api_key=get_env("GROQ_API_KEY")
-    )
-    return create_sql_agent(
-        llm=llm,
-        db=db,
-        agent_type="tool-calling",
-        verbose=True
-    )
-
-
-def ask_with_agent(agent, question: str) -> str:
-    try:
-        result = agent.invoke({"input": question})
-        return result.get("output") or result.get("answer") or str(result)
-    except Exception as e:
-        return f"Error: {str(e)}"
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            if mode == "Upload your own data":
+                if uploaded_agent:
+                    answer = ask_with_agent(uploaded_agent, question)
+                else:
+                    answer = "Please upload a file first."
+            else:
+                answer = ask(question)
+            st.markdown(answer)
+            st.session_state.messages.append({"role": "assistant", "content": answer})
